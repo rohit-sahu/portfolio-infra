@@ -101,8 +101,12 @@ stacks. Set `DEPLOY_ENV` to `dev` only if you intend to use that environment.
 From the repository root, run the script with your configured AWS profile,
 expected account ID, and a tag already published to both public GHCR packages:
 
+Run `aws configure list-profiles` and replace `YOUR_AWS_PROFILE` with a
+configured profile. Verify the target account with
+`aws sts get-caller-identity --profile YOUR_AWS_PROFILE` after signing in.
+
 ```sh
-bash scripts/deploy-test.sh --profile portfolio-dev --account 123456789012 \
+bash scripts/deploy-test.sh --profile YOUR_AWS_PROFILE --account 123456789012 \
   --image-tag YOUR_PUBLISHED_TAG --sso
 ```
 
@@ -114,7 +118,7 @@ infrastructure tests, and deploys all six stacks after confirmation.
 To publish local source instead of reusing images:
 
 ```sh
-bash scripts/deploy-test.sh --profile portfolio-dev --account 123456789012 \
+bash scripts/deploy-test.sh --profile YOUR_AWS_PROFILE --account 123456789012 \
   --push-images --github-user YOUR_GITHUB_LOGIN --sso
 ```
 
@@ -122,7 +126,7 @@ Use `--services orders` to build, publish, and deploy only orders, or pass
 `--services orders,worker` to select both ECS services:
 
 ```sh
-bash scripts/deploy-test.sh --profile portfolio-dev --account 123456789012 \
+bash scripts/deploy-test.sh --profile YOUR_AWS_PROFILE --account 123456789012 \
   --services orders,worker --push-images --github-user YOUR_GITHUB_LOGIN --sso
 ```
 
@@ -329,6 +333,22 @@ profile, region, and test environment for [teardown](#destroy-an-aws-test-deploy
    When finished, follow [Destroy an AWS test deployment](#destroy-an-aws-test-deployment).
 
 ### Destroy an AWS test deployment
+
+From the repository root, run the teardown script with the same profile,
+account, region, and exact `test-*` prefix printed by deployment:
+
+```sh
+bash scripts/destroy-test.sh --profile dev --account 123456789012 \
+  --region ap-south-1 --env test-YOUR-TIMESTAMP
+```
+
+Add `--sso` if the profile needs an SSO login. The script requires AWS CLI v2
+and `jq`. It previews what it will delete and asks you to type the exact test
+prefix. It handles partial deployments, waits for stack deletion, and removes
+the recorded test bucket (including all versions and delete markers),
+surviving log groups, and any legacy test ECR repositories. It leaves
+`CDKToolkit`, GHCR packages, and manually created resources untouched. Use
+the checklist below for manual teardown or for a shared `dev` deployment.
 
 These steps permanently delete test resources and data. Reuse the same AWS
 profile, region, and exact `DEPLOY_ENV` from deployment. If you used `dev`,

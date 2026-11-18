@@ -6,7 +6,7 @@ usage() {
 Usage: bash scripts/deploy-test.sh --profile PROFILE --account ACCOUNT_ID \
          (--image-tag TAG | --push-images --github-user LOGIN) [options]
 
-  --profile PROFILE       Configured AWS CLI profile (required)
+  --profile PROFILE       Configured AWS CLI profile (required; see aws configure list-profiles)
   --account ACCOUNT_ID    Expected 12-digit AWS account ID (required)
   --region REGION         Target AWS region (default: ap-south-1)
   --env NAME              Disposable test-* stack prefix (default: UTC timestamp)
@@ -118,6 +118,13 @@ cdk=(npx --yes --package aws-cdk@2.1148.1 cdk)
 unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_SECURITY_TOKEN
 export AWS_PROFILE="$profile" AWS_DEFAULT_PROFILE="$profile"
 export AWS_REGION="$region" AWS_DEFAULT_REGION="$region" AWS_PAGER=''
+
+configured_profiles="$(aws configure list-profiles)" \
+  || die 'Could not list AWS CLI profiles; check your AWS CLI configuration'
+if ! grep -Fxq -- "$profile" <<< "$configured_profiles"; then
+  printf 'Configured AWS CLI profiles:\n%s\n' "${configured_profiles:-  (none)}" >&2
+  die "AWS profile '$profile' does not exist. Use an existing --profile or create one with 'aws configure sso --profile $profile' if you use IAM Identity Center."
+fi
 
 if "$sso"; then
   aws sso login --profile "$profile"
