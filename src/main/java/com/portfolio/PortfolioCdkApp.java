@@ -1,4 +1,4 @@
-package com.myorg;
+package com.portfolio;
 
 import software.amazon.awscdk.App;
 

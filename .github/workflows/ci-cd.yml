@@ -1,0 +1,75 @@
+name: ci-cd
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write      # OIDC to AWS, no stored access keys
+  contents: read
+
+env:
+  AWS_REGION: ap-south-1
+  SERVICES: "orders worker"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '21', cache: maven }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm install -g aws-cdk
+      - run: mvn -q -f infra/pom.xml test
+      - run: cdk synth -q -c env=dev
+        working-directory: infra
+
+  deploy:
+    needs: verify
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 1          # dev first, then prod
+      matrix:
+        env: [dev, prod]
+    environment: ${{ matrix.env }}   # prod has required reviewers = approval gate
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '21', cache: maven }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm install -g aws-cdk
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}   # per-environment secret
+          aws-region: ${{ env.AWS_REGION }}
+
+      # 1. Shared layers. Creates the ECR repos on first run; no-op afterwards.
+      - name: Deploy network, messaging, platform
+        working-directory: infra
+        run: >
+          cdk deploy "${{ matrix.env }}-network" "${{ matrix.env }}-messaging"
+          "${{ matrix.env }}-platform" -c env=${{ matrix.env }} --require-approval never
+
+      # 2. Build Docker images and push to ECR, tagged with the git SHA.
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Build and push images
+        run: |
+          TAG=${GITHUB_SHA::7}
+          for svc in $SERVICES; do
+            IMAGE=${{ steps.ecr.outputs.registry }}/${{ matrix.env }}/$svc:$TAG
+            docker build -t "$IMAGE" services/$svc
+            docker push "$IMAGE"
+          done
+
+      # 3. Deploy all service stacks pointing at the new image tag.
+      - name: Deploy services
+        working-directory: infra
+        run: >
+          cdk deploy "${{ matrix.env }}-svc-*" -c env=${{ matrix.env }}
+          -c imageTag=${GITHUB_SHA::7} --require-approval never

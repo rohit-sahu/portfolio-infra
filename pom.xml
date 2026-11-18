@@ -2,8 +2,8 @@
 <project xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd"
          xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
     <modelVersion>4.0.0</modelVersion>
-    <groupId>com.myorg</groupId>
-    <artifactId>portfolio-cdk</artifactId>
+    <groupId>com.portfolio</groupId>
+    <artifactId>portfolio-infra</artifactId>
     <version>0.1</version>
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -27,7 +27,7 @@
                 <artifactId>exec-maven-plugin</artifactId>
                 <version>3.1.0</version>
                 <configuration>
-                    <mainClass>com.myorg.PortfolioCdkApp</mainClass>
+                    <mainClass>com.portfolio.PortfolioCdkApp</mainClass>
                 </configuration>
             </plugin>
         </plugins>
