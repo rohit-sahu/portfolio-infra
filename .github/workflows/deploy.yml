@@ -1,0 +1,65 @@
+name: deploy-environment
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: GitHub environment and CDK stack prefix
+        required: true
+        type: string
+      image-prefix:
+        description: GHCR namespace for the orders and worker images
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ap-south-1
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      DEPLOY_ENV: ${{ inputs.environment }}
+      IMAGE_PREFIX: ${{ inputs.image-prefix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '21', cache: maven }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm install --global aws-cdk@2.1148.1
+
+      - name: Validate environment configuration
+        env:
+          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+        run: |
+          if [[ -z "$AWS_ROLE_ARN" ]]; then
+            echo "::error::Set the AWS_ROLE_ARN secret in the $DEPLOY_ENV GitHub environment."
+            exit 1
+          fi
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: portfolio-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy shared infrastructure and test Lambda
+        working-directory: infra
+        run: |
+          cdk deploy "$DEPLOY_ENV-network" "$DEPLOY_ENV-messaging" \
+            "$DEPLOY_ENV-platform" "$DEPLOY_ENV-lambda-test" \
+            -c "env=$DEPLOY_ENV" -c "imagePrefix=$IMAGE_PREFIX" \
+            -c "imageTag=$GITHUB_SHA" --require-approval never
+
+      - name: Deploy services
+        working-directory: infra
+        run: |
+          cdk deploy "$DEPLOY_ENV-svc-*" -c "env=$DEPLOY_ENV" \
+            -c "imagePrefix=$IMAGE_PREFIX" -c "imageTag=$GITHUB_SHA" \
+            --require-approval never

@@ -12,6 +12,18 @@
         <junit.version>5.7.1</junit.version>
     </properties>
     <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <resource>
+                <directory>../services/lambda-test</directory>
+                <targetPath>lambda-test</targetPath>
+                <includes>
+                    <include>index.py</include>
+                </includes>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -27,7 +39,7 @@
                 <artifactId>exec-maven-plugin</artifactId>
                 <version>3.1.0</version>
                 <configuration>
-                    <mainClass>com.portfolio.PortfolioCdkApp</mainClass>
+                    <mainClass>com.portfolio.InfraApp</mainClass>
                 </configuration>
             </plugin>
         </plugins>

@@ -1,13 +1,9 @@
 package com.portfolio;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import software.amazon.awscdk.*;
 import software.amazon.awscdk.services.autoscaling.AutoScalingGroup;
 import software.amazon.awscdk.services.ec2.*;
-import software.amazon.awscdk.services.ecr.LifecycleRule;
-import software.amazon.awscdk.services.ecr.Repository;
 import software.amazon.awscdk.services.ecs.*;
 import software.amazon.awscdk.services.elasticloadbalancingv2.*;
 import software.amazon.awscdk.services.iam.ManagedPolicy;
@@ -19,10 +15,9 @@ public class PlatformStack extends Stack {
     private final Cluster cluster;
     private final ApplicationListener listener;
     private final String capacityProviderName;
-    private final Map<String, Repository> repos = new HashMap<>();
 
     public PlatformStack(Construct scope, String id, StackProps props,
-                         String envName, IVpc vpc, List<ServiceSpec> services) {
+                         String envName, IVpc vpc) {
         super(scope, id, props);
 
         cluster = Cluster.Builder.create(this, "Cluster")
@@ -82,21 +77,10 @@ public class PlatformStack extends Stack {
         instanceSg.getConnections().allowFrom(alb, Port.tcpRange(32768, 65535),
                 "ALB to ECS dynamic host ports");
 
-        // ---- ECR: one repository per microservice --------------------------
-        for (ServiceSpec s : services) {
-            repos.put(s.name(), Repository.Builder.create(this, "Repo-" + s.name())
-                    .repositoryName(envName + "/" + s.name())
-                    .imageScanOnPush(true)
-                    .lifecycleRules(List.of(LifecycleRule.builder().maxImageCount(20).build()))
-                    .removalPolicy(RemovalPolicy.RETAIN)
-                    .build());
-        }
-
         CfnOutput.Builder.create(this, "AlbDns").value(alb.getLoadBalancerDnsName()).build();
     }
 
     public Cluster getCluster()               { return cluster; }
     public ApplicationListener getListener()  { return listener; }
     public String getCapacityProviderName()   { return capacityProviderName; }
-    public Repository getRepo(String name)    { return repos.get(name); }
 }

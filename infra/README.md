@@ -1,19 +1,14 @@
-# Welcome to your CDK Java project!
+# Infrastructure CDK app
 
-You should explore the contents of this project. It demonstrates a CDK app with an instance of a stack (`PortfolioCdkStack`)
-which contains an Amazon SQS queue that is subscribed to an Amazon SNS topic.
+See the repository [README](../README.md) for the architecture overview, prerequisites, and deploy workflow. Run CDK commands from this directory; the app entry point is `com.portfolio.InfraApp`.
 
-The `cdk.json` file tells the CDK Toolkit how to execute your app.
+The `orders` and `worker` images are placeholders required for deployment wiring.
+ECS pulls them anonymously from public GHCR packages. For ECS deployments, pass
+`-c imageTag=<published-tag>` and, if using another namespace, `-c imagePrefix=<ghcr-prefix>`.
+No application ECR repositories are created. A compatible CDK bootstrap stack
+is still required for the VPC default-security-group custom-resource asset.
 
-It is a [Maven](https://maven.apache.org/) based project, so you can open this project with any Maven compatible Java IDE to build and run tests.
-
-## Useful commands
-
- * `mvn package`     compile and run tests
- * `cdk ls`          list all stacks in the app
- * `cdk synth`       emits the synthesized CloudFormation template
- * `cdk deploy`      deploy this stack to your default AWS account/region
- * `cdk diff`        compare deployed stack with current state
- * `cdk docs`        open CDK documentation
-
-Enjoy!
+`<env>-lambda-test` adds a test Lambda for manual invocation, S3 object-created
+events under `lambda-test/`, EC2 state-change events, and the ALB's `/lambda-test`
+route. Its Python source is included from `../services/lambda-test` by Maven.
+See the root README for deployment, example invocations, and trigger scope.

@@ -1,12 +1,16 @@
 name: ci-cd
+
 on:
   pull_request:
   push:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
-  id-token: write      # OIDC to AWS, no stored access keys
   contents: read
+
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   AWS_REGION: ap-south-1
@@ -20,56 +24,80 @@ jobs:
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: '21', cache: maven }
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
-      - run: npm install -g aws-cdk
+        with: { node-version: 22 }
+      - run: npm install --global aws-cdk@2.1148.1
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.13' }
+      - run: python -m unittest discover -s services/lambda-test
+      - run: mvn --batch-mode --no-transfer-progress test
       - run: mvn -q -f infra/pom.xml test
-      - run: cdk synth -q -c env=dev
+      - name: Build service images without pushing
+        run: |
+          for svc in $SERVICES; do
+            docker build --tag "portfolio-$svc:verify" "services/$svc"
+          done
+      - name: Synthesize dev and prod
         working-directory: infra
+        run: |
+          cdk synth '*' --quiet -c env=dev
+          cdk synth '*' --quiet -c env=prod
 
-  deploy:
+  publish:
     needs: verify
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
-    strategy:
-      max-parallel: 1          # dev first, then prod
-      matrix:
-        env: [dev, prod]
-    environment: ${{ matrix.env }}   # prod has required reviewers = approval gate
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image-prefix: ${{ steps.registry.outputs.image-prefix }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with: { distribution: temurin, java-version: '21', cache: maven }
-      - uses: actions/setup-node@v4
-        with: { node-version: 20 }
-      - run: npm install -g aws-cdk
-
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}   # per-environment secret
-          aws-region: ${{ env.AWS_REGION }}
-
-      # 1. Shared layers. Creates the ECR repos on first run; no-op afterwards.
-      - name: Deploy network, messaging, platform
-        working-directory: infra
-        run: >
-          cdk deploy "${{ matrix.env }}-network" "${{ matrix.env }}-messaging"
-          "${{ matrix.env }}-platform" -c env=${{ matrix.env }} --require-approval never
-
-      # 2. Build Docker images and push to ECR, tagged with the git SHA.
-      - id: ecr
-        uses: aws-actions/amazon-ecr-login@v2
-      - name: Build and push images
+      - name: Set GHCR image prefix
+        id: registry
+        run: echo "image-prefix=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - name: Publish orders and worker images to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_PREFIX: ${{ steps.registry.outputs.image-prefix }}
         run: |
-          TAG=${GITHUB_SHA::7}
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           for svc in $SERVICES; do
-            IMAGE=${{ steps.ecr.outputs.registry }}/${{ matrix.env }}/$svc:$TAG
-            docker build -t "$IMAGE" services/$svc
-            docker push "$IMAGE"
+            image="$IMAGE_PREFIX/$svc:$GITHUB_SHA"
+            docker build --platform linux/amd64 --tag "$image" \
+              --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+              "services/$svc"
+            docker push "$image"
+          done
+          docker logout ghcr.io
+      - name: Verify that ECS can pull both images anonymously
+        env:
+          IMAGE_PREFIX: ${{ steps.registry.outputs.image-prefix }}
+        run: |
+          for svc in $SERVICES; do
+            image="$IMAGE_PREFIX/$svc:$GITHUB_SHA"
+            if ! docker manifest inspect "$image" >/dev/null; then
+              echo "::error::Cannot read $image anonymously. Check that the GHCR package exists and is public, then rerun the failed job."
+              exit 1
+            fi
           done
 
-      # 3. Deploy all service stacks pointing at the new image tag.
-      - name: Deploy services
-        working-directory: infra
-        run: >
-          cdk deploy "${{ matrix.env }}-svc-*" -c env=${{ matrix.env }}
-          -c imageTag=${GITHUB_SHA::7} --require-approval never
+  deploy-dev:
+    needs: publish
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: dev
+      image-prefix: ${{ needs.publish.outputs.image-prefix }}
+
+  deploy-prod:
+    needs: [publish, deploy-dev]
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: prod
+      image-prefix: ${{ needs.publish.outputs.image-prefix }}

@@ -14,8 +14,14 @@ public class InfraApp {
 
     public static void main(String[] args) {
         App app = new App();
+        defineStacks(app);
+        app.synth();
+    }
+
+    static void defineStacks(App app) {
         String envName  = ctx(app, "env", "dev");       // -c env=prod
-        String imageTag = ctx(app, "imageTag", "latest"); // -c imageTag=<git sha>
+        String imageTag = ctx(app, "imageTag", "latest"); // ECS deploys must specify a published tag
+        String imagePrefix = ctx(app, "imagePrefix", "ghcr.io/rohit-sahu/portfolio-infra");
 
         StackProps props = StackProps.builder()
                 .env(Environment.builder()
@@ -28,7 +34,9 @@ public class InfraApp {
         NetworkStack network     = new NetworkStack(app, envName + "-network", props);
         MessagingStack messaging = new MessagingStack(app, envName + "-messaging", props);
         PlatformStack platform   = new PlatformStack(app, envName + "-platform", props,
-                envName, network.getVpc(), SERVICES);
+                envName, network.getVpc());
+        new LambdaServiceStack(app, envName + "-lambda-test", props, envName,
+                messaging.getBucket(), platform.getListener());
 
         // Least privilege: each service gets only what it needs on its own TaskRole
         Map<String, Consumer<IGrantable>> grants = Map.of(
@@ -53,12 +61,11 @@ public class InfraApp {
         for (ServiceSpec spec : SERVICES) {
             new ServiceStack(app, envName + "-svc-" + spec.name(), props, envName, spec,
                     platform.getCluster(), platform.getCapacityProviderName(),
-                    platform.getListener(), platform.getRepo(spec.name()), imageTag,
+                    platform.getListener(), imagePrefix + "/" + spec.name() + ":" + imageTag,
                     envVars.get(spec.name()), grants.get(spec.name()));
         }
 
         Tags.of(app).add("env", envName);
-        app.synth();
     }
 
     private static String ctx(App app, String key, String dflt) {

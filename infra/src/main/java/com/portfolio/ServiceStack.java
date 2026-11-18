@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 import software.amazon.awscdk.*;
-import software.amazon.awscdk.services.ecr.IRepository;
+import software.amazon.awscdk.services.applicationautoscaling.EnableScalingProps;
 import software.amazon.awscdk.services.ecs.*;
 import software.amazon.awscdk.services.elasticloadbalancingv2.*;
 import software.amazon.awscdk.services.elasticloadbalancingv2.HealthCheck; // disambiguate from ecs.HealthCheck
@@ -17,7 +17,7 @@ public class ServiceStack extends Stack {
 
     public ServiceStack(Construct scope, String id, StackProps props, String envName,
                         ServiceSpec spec, Cluster cluster, String capacityProvider,
-                        IApplicationListener listener, IRepository repo, String imageTag,
+                        IApplicationListener listener, String imageUri,
                         Map<String, String> environment, Consumer<IGrantable> grants) {
         super(scope, id, props);
 
@@ -35,7 +35,7 @@ public class ServiceStack extends Stack {
 
         ContainerDefinition container = task.addContainer("app",
                 ContainerDefinitionOptions.builder()
-                        .image(ContainerImage.fromEcrRepository(repo, imageTag)) // built by CI, tagged with git SHA
+                        .image(ContainerImage.fromRegistry(imageUri))
                         .cpu(spec.cpu())
                         .memoryLimitMiB(spec.memoryMiB())
                         .essential(true)

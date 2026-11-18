@@ -22,6 +22,7 @@ public class MessagingStack extends Stack {
                 .encryption(BucketEncryption.S3_MANAGED)
                 .blockPublicAccess(BlockPublicAccess.BLOCK_ALL)
                 .enforceSsl(true)
+                .eventBridgeEnabled(true)
                 .removalPolicy(RemovalPolicy.RETAIN)   // never delete data on stack delete
                 .build();
 
