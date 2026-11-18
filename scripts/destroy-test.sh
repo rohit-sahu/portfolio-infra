@@ -4,12 +4,14 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage: bash scripts/destroy-test.sh --profile PROFILE --account ACCOUNT_ID \
-         --env test-NAME [--region REGION] [--sso]
+         --env test-NAME [--region REGION] [--sso] [--delete-bootstrap]
 
 Permanently deletes the named test deployment, including its retained uploads,
 log groups, and any legacy ECR repositories found in its stack inventory.
 The region defaults to ap-south-1. Requires AWS CLI v2 and jq.
-Does not delete CDKToolkit, GHCR packages, or resources outside these stacks.
+--delete-bootstrap also deletes CDKToolkit and its retained S3/ECR assets.
+Use only for a disposable account/region with no other bootstrap consumers.
+GHCR packages and unrelated resources are never deleted.
 EOF
 }
 
@@ -23,11 +25,13 @@ account=''
 region='ap-south-1'
 deploy_env=''
 sso=false
+delete_bootstrap=false
 
 while (( $# )); do
   case "$1" in
     -h|--help) usage; exit 0 ;;
     --sso) sso=true; shift ;;
+    --delete-bootstrap) delete_bootstrap=true; shift ;;
     --profile|--account|--region|--env)
       [[ -n "${2:-}" && "$2" != --* ]] || die "$1 requires a value"
       case "$1" in
@@ -66,6 +70,13 @@ actual_account="$(aws_target sts get-caller-identity | jq -er .Account)"
   || die "Profile $profile resolved to account $actual_account, not $account"
 
 stack_suffixes=(svc-orders svc-worker lambda-test platform messaging network)
+stack_names=()
+for suffix in "${stack_suffixes[@]}"; do
+  stack_names+=("$deploy_env-$suffix")
+done
+if "$delete_bootstrap"; then
+  stack_names+=(CDKToolkit)
+fi
 stack_summaries="$(aws_target cloudformation list-stacks)"
 inventory="$(mktemp)"
 batch_file=''
@@ -79,8 +90,23 @@ find_stack() {
   ' <<< "$2"
 }
 
-for suffix in "${stack_suffixes[@]}"; do
-  stack_name="$deploy_env-$suffix"
+check_bootstrap_consumers() {
+  local summaries="$1" other_stacks
+  other_stacks="$(jq -r --argjson targets "$(printf '%s\n' "${stack_names[@]}" | jq -R . | jq -s .)" '
+    .StackSummaries[]
+    | select(.StackStatus != "DELETE_COMPLETE")
+    | select(.StackName as $name | $targets | index($name) | not)
+    | .StackName
+  ' <<< "$summaries")"
+  [[ -z "$other_stacks" ]] \
+    || die "Refusing to delete shared bootstrap resources while other active stacks exist in this region: $other_stacks"
+}
+
+if "$delete_bootstrap"; then
+  check_bootstrap_consumers "$stack_summaries"
+fi
+
+for stack_name in "${stack_names[@]}"; do
   stack="$(find_stack "$stack_name" "$stack_summaries")"
   [[ -n "$stack" ]] || continue
   stack_id="$(jq -er .StackId <<< "$stack")"
@@ -90,13 +116,14 @@ for suffix in "${stack_suffixes[@]}"; do
     *_IN_PROGRESS|*_CLEANUP_IN_PROGRESS) die "Wait for $stack_name ($stack_status) before teardown" ;;
   esac
   aws_target cloudformation list-stack-resources --stack-name "$stack_id" |
-    jq -r '
+    jq -r --arg stack "$stack_name" '
       .StackResourceSummaries[]
       | select(.PhysicalResourceId != null and .PhysicalResourceId != "")
       | if .ResourceType == "AWS::Logs::LogGroup" then ["logs", .PhysicalResourceId]
         elif .ResourceType == "AWS::Lambda::Function" then ["logs", "/aws/lambda/" + .PhysicalResourceId]
         elif .ResourceType == "AWS::S3::Bucket" and .ResourceStatus != "DELETE_COMPLETE" then ["bucket", .PhysicalResourceId]
-        elif .ResourceType == "AWS::ECR::Repository" and .ResourceStatus != "DELETE_COMPLETE" then ["ecr", .PhysicalResourceId]
+        elif .ResourceType == "AWS::ECR::Repository" and .ResourceStatus != "DELETE_COMPLETE" then
+          [(if $stack == "CDKToolkit" then "bootstrap-ecr" else "ecr" end), .PhysicalResourceId]
         else empty end | @tsv
     ' >> "$inventory"
   printf 'Stack: %s (%s)\n' "$stack_name" "$stack_status"
@@ -111,8 +138,14 @@ printf 'Type %s to permanently delete these test resources: ' "$deploy_env"
 read -r confirmation || die 'Interactive confirmation required'
 [[ "$confirmation" == "$deploy_env" ]] || die 'Teardown cancelled'
 
-for suffix in "${stack_suffixes[@]}"; do
-  stack_name="$deploy_env-$suffix"
+if "$delete_bootstrap"; then
+  printf 'WARNING: CDKToolkit assets may be used by pipelines or stacks not visible here.\n'
+  printf 'Confirm no other consumers use this bootstrap. Type DELETE-BOOTSTRAP-%s-%s: ' "$account" "$region"
+  read -r confirmation || die 'Interactive bootstrap confirmation required'
+  [[ "$confirmation" == "DELETE-BOOTSTRAP-$account-$region" ]] || die 'Teardown cancelled'
+fi
+
+for stack_name in "${stack_names[@]}"; do
   stack="$(find_stack "$stack_name" "$stack_summaries")"
   [[ -n "$stack" ]] || continue
   stack_id="$(jq -er .StackId <<< "$stack")"
@@ -120,6 +153,11 @@ for suffix in "${stack_suffixes[@]}"; do
     DELETE_COMPLETE) continue ;;
     DELETE_IN_PROGRESS) ;;
     *)
+      if [[ "$stack_name" == CDKToolkit ]]; then
+        check_bootstrap_consumers "$(aws_target cloudformation list-stacks)"
+        aws_target cloudformation update-termination-protection \
+          --stack-name "$stack_id" --no-enable-termination-protection >/dev/null
+      fi
       printf 'Deleting %s\n' "$stack_name"
       aws_target cloudformation delete-stack --stack-name "$stack_id"
       ;;
@@ -162,9 +200,13 @@ while IFS=$'\t' read -r kind name; do
         aws_target logs delete-log-group --log-group-name "$name"
       fi
       ;;
-    ecr)
-      [[ "$name" == "$deploy_env/orders" || "$name" == "$deploy_env/worker" ]] \
-        || die "Unexpected legacy ECR repository $name; review it manually"
+    ecr|bootstrap-ecr)
+      if [[ "$kind" == ecr ]]; then
+        [[ "$name" == "$deploy_env/orders" || "$name" == "$deploy_env/worker" ]] \
+          || die "Unexpected legacy ECR repository $name; review it manually"
+      else
+        "$delete_bootstrap" || die 'Bootstrap ECR cleanup requires --delete-bootstrap'
+      fi
       exists="$(aws_target ecr describe-repositories --registry-id "$account" |
         jq --arg name "$name" 'any(.repositories[]?; .repositoryName == $name)')"
       if [[ "$exists" == true ]]; then
@@ -181,4 +223,8 @@ remaining="$(aws_target cloudformation list-stacks |
     | "\(.StackName) (\(.StackStatus))"
   ')"
 [[ -z "$remaining" ]] || die "Stacks still present; review manually: $remaining"
-printf 'Teardown complete for %s. CDKToolkit and GHCR were left untouched.\n' "$deploy_env"
+if "$delete_bootstrap"; then
+  printf 'Teardown complete for %s, including CDKToolkit and its recorded assets. GHCR was left untouched.\n' "$deploy_env"
+else
+  printf 'Teardown complete for %s. CDKToolkit and GHCR were left untouched.\n' "$deploy_env"
+fi

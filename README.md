@@ -350,6 +350,22 @@ surviving log groups, and any legacy test ECR repositories. It leaves
 `CDKToolkit`, GHCR packages, and manually created resources untouched. Use
 the checklist below for manual teardown or for a shared `dev` deployment.
 
+For an account/region used **only for this test**, optionally remove
+`CDKToolkit` and its retained asset bucket/ECR repository as well:
+
+```sh
+bash scripts/destroy-test.sh --profile dev --account 123456789012 \
+  --region ap-south-1 --env test-YOUR-TIMESTAMP --delete-bootstrap
+```
+
+This requires a second confirmation, deletes bootstrap last, and disables
+its termination protection if necessary. The script refuses if other active
+CloudFormation stacks exist in the region, but it cannot detect every external
+pipeline or cross-account bootstrap consumer. Confirm that none exist before
+proceeding. All versions in the recorded bootstrap asset bucket and all images
+in its ECR repository are permanently deleted. Future CDK deployments will
+need bootstrapping again. GHCR packages are not affected.
+
 These steps permanently delete test resources and data. Reuse the same AWS
 profile, region, and exact `DEPLOY_ENV` from deployment. If you used `dev`,
 disable automated deployments to it and confirm no one else is using it.
