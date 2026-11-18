@@ -118,10 +118,24 @@ bash scripts/deploy-test.sh --profile portfolio-dev --account 123456789012 \
   --push-images --github-user YOUR_GITHUB_LOGIN --sso
 ```
 
+Use `--services orders` to build, publish, and deploy only orders, or pass
+`--services orders,worker` to select both ECS services:
+
+```sh
+bash scripts/deploy-test.sh --profile portfolio-dev --account 123456789012 \
+  --services orders,worker --push-images --github-user YOUR_GITHUB_LOGIN --sso
+```
+
+The selection also works with `--image-tag` to reuse published images. CDK
+includes the selected services' shared infrastructure dependencies but skips
+the standalone Lambda test stack. Omit `--services` for all six stacks.
+Selecting fewer services does not delete previously deployed stacks.
+
 Start Docker first and enter a GitHub classic PAT with `write:packages` when
 Docker prompts. Newly published GHCR packages are private by default. If the
 script stops at the anonymous image check, set both packages to **Public**,
-then rerun using the printed `--image-tag` instead of `--push-images`.
+then rerun with the same service selection and the printed `--image-tag`
+instead of `--push-images` and `--github-user`.
 Run `bash scripts/deploy-test.sh --help` for all options. Save the printed
 profile, region, and test environment for [teardown](#destroy-an-aws-test-deployment).
 

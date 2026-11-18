@@ -12,13 +12,16 @@ Usage: bash scripts/deploy-test.sh --profile PROFILE --account ACCOUNT_ID \
   --env NAME              Disposable test-* stack prefix (default: UTC timestamp)
   --image-prefix PREFIX   Lowercase GHCR repo path (default: ghcr.io/rohit-sahu/portfolio-infra)
   --image-tag TAG         Reuse this published tag, or use it when pushing
-  --push-images           Build and push both images (default tag: manual-<UTC timestamp>)
+  --services LIST         Comma-separated ECS services: orders,worker (default: all stacks)
+  --push-images           Build and push selected images (default tag: manual-<UTC timestamp>)
   --github-user LOGIN     GHCR login for --push-images; Docker prompts for a classic PAT
   --sso                   Run aws sso login before checking the AWS account
   --skip-bootstrap        Use an existing compatible CDKToolkit stack
   --help                  Show this help
 
-Images must be public and support linux/amd64. Deployment requires interactive
+With --services, CDK deploys only the selected ECS services and their stack
+dependencies, not the standalone Lambda test stack. Images must be public
+and support linux/amd64. Deployment requires interactive
 confirmation and creates billable AWS resources. This script does not destroy them.
 EOF
 }
@@ -36,6 +39,7 @@ deploy_env="test-$timestamp"
 image_prefix='ghcr.io/rohit-sahu/portfolio-infra'
 image_tag=''
 github_user=''
+service_list=''
 push_images=false
 sso=false
 bootstrap=true
@@ -46,7 +50,7 @@ while (( $# )); do
     --push-images) push_images=true; shift ;;
     --sso) sso=true; shift ;;
     --skip-bootstrap) bootstrap=false; shift ;;
-    --profile|--account|--region|--env|--image-prefix|--image-tag|--github-user)
+    --profile|--account|--region|--env|--image-prefix|--image-tag|--github-user|--services)
       [[ -n "${2:-}" && "$2" != --* ]] || die "$1 requires a value"
       case "$1" in
         --profile) profile="$2" ;;
@@ -56,6 +60,10 @@ while (( $# )); do
         --image-prefix) image_prefix="$2" ;;
         --image-tag) image_tag="$2" ;;
         --github-user) github_user="$2" ;;
+        --services)
+          [[ -z "$service_list" ]] || die 'Pass --services only once, with a comma-separated list'
+          service_list="$2"
+          ;;
       esac
       shift 2
       ;;
@@ -79,6 +87,25 @@ fi
 [[ "$image_tag" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$ ]] \
   || die 'Provide a valid --image-tag or use --push-images'
 
+deploy_targets=(--all)
+services=(orders worker)
+if [[ -n "$service_list" ]]; then
+  [[ "$service_list" =~ ^[a-z]+(,[a-z]+)*$ ]] \
+    || die '--services must be a comma-separated list, e.g. orders,worker'
+  IFS=, read -r -a services <<< "$service_list"
+  deploy_targets=()
+  seen=','
+  for service in "${services[@]}"; do
+    case "$service" in
+      orders|worker) ;;
+      *) die "Unknown service '$service'; supported services: orders, worker" ;;
+    esac
+    [[ "$seen" != *",$service,"* ]] || die "Duplicate service '$service'"
+    seen+="$service,"
+    deploy_targets+=("$deploy_env-svc-$service")
+  done
+fi
+
 for tool in aws npx node java mvn docker; do
   command -v "$tool" >/dev/null || die "Required tool not found: $tool"
 done
@@ -100,8 +127,11 @@ actual_account="$(aws sts get-caller-identity --query Account --output text)" \
 [[ "$actual_account" == "$account" ]] \
   || die "Profile $profile resolved to account $actual_account, not $account"
 
-printf 'AWS account: %s\nRegion: %s\nTest environment: %s\nImages: %s/{orders,worker}:%s\n' \
-  "$account" "$region" "$deploy_env" "$image_prefix" "$image_tag"
+printf 'AWS account: %s\nRegion: %s\nTest environment: %s\n' "$account" "$region" "$deploy_env"
+for service in "${services[@]}"; do
+  printf 'Image: %s/%s:%s\n' "$image_prefix" "$service" "$image_tag"
+done
+printf 'CDK targets: %s\n' "${deploy_targets[*]}"
 printf 'Bootstrap: %s | Build and push images: %s\n' "$bootstrap" "$push_images"
 printf 'This deploys billable resources. Type %s to continue: ' "$deploy_env"
 read -r confirmation || die 'Interactive confirmation required'
@@ -111,7 +141,7 @@ if "$push_images"; then
   docker info >/dev/null || die 'Start Docker Desktop or your Docker daemon'
   docker buildx version >/dev/null || die 'Docker Buildx is required'
   docker login ghcr.io --username "$github_user"
-  for service in orders worker; do
+  for service in "${services[@]}"; do
     image="$image_prefix/$service:$image_tag"
     docker buildx build --platform linux/amd64 --load --tag "$image" \
       --label "org.opencontainers.image.source=https://github.com/${image_prefix#ghcr.io/}" \
@@ -123,10 +153,10 @@ fi
 # Test ECS's anonymous access without modifying the user's Docker login.
 anonymous_dir="$(mktemp -d)"
 trap 'rmdir "$anonymous_dir"' EXIT
-for service in orders worker; do
+for service in "${services[@]}"; do
   image="$image_prefix/$service:$image_tag"
   docker --config "$anonymous_dir" manifest inspect "$image" >/dev/null \
-    || die "Cannot read $image anonymously. Publish the tag and make its package Public, then rerun with --image-tag $image_tag and without --push-images or --github-user."
+    || die "Cannot read $image anonymously. Publish the tag and make its package Public, then rerun with the same service selection, --image-tag $image_tag, and without --push-images or --github-user."
 done
 
 mvn --batch-mode -f infra/pom.xml test
@@ -136,6 +166,6 @@ if "$bootstrap"; then
 fi
 printf 'Keep this target for teardown, even if deploy fails: profile=%s region=%s env=%s\n' \
   "$profile" "$region" "$deploy_env"
-"${cdk[@]}" deploy --all \
+"${cdk[@]}" deploy "${deploy_targets[@]}" \
   -c "env=$deploy_env" -c "imagePrefix=$image_prefix" -c "imageTag=$image_tag"
 printf 'See README.md#destroy-an-aws-test-deployment for cleanup of %s.\n' "$deploy_env"
