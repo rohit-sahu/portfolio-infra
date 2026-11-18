@@ -2,6 +2,10 @@
 
 This repository contains an AWS CDK Java app in `infra/` that provisions a VPC, an ECS-on-EC2 platform, an application load balancer, and S3/SNS/SQS messaging resources. ECS pulls the `orders` and `worker` images from public GitHub Container Registry (GHCR) packages. Both services are placeholders; order processing and queue consumption are not implemented.
 
+The root Maven project aggregates `infra/`, both Java services in `services/`,
+and the separate CDK starter in `starter/`. Running `mvn test` from the
+repository root builds and tests all four projects.
+
 ## Validate and synthesize
 
 Requirements: Java 21, Maven, Node.js, and the AWS CDK CLI.
@@ -31,7 +35,6 @@ charges. If you're deploying to AWS for an end-to-end test, see
 
    ```sh
    mvn --batch-mode test
-   mvn --batch-mode -f infra/pom.xml test
    mvn --batch-mode -f services/orders/pom.xml package
    mvn --batch-mode -f services/worker/pom.xml package
    python3 -B -m unittest discover -s services/lambda-test
