@@ -96,6 +96,37 @@ end-to-end test, prefer a unique environment
 prefix such as `test-20261118` so cleanup cannot affect CI's `dev` or `prod`
 stacks. Set `DEPLOY_ENV` to `dev` only if you intend to use that environment.
 
+### One-command test deployment
+
+From the repository root, run the script with your configured AWS profile,
+expected account ID, and a tag already published to both public GHCR packages:
+
+```sh
+bash scripts/deploy-test.sh --profile portfolio-dev --account 123456789012 \
+  --image-tag YOUR_PUBLISHED_TAG --sso
+```
+
+Omit `--sso` if the profile does not use SSO. Add `--skip-bootstrap` if the
+target already has a compatible `CDKToolkit` stack. The script uses the pinned
+CDK CLI through `npx`, checks the AWS account and public images, runs the
+infrastructure tests, and deploys all six stacks after confirmation.
+
+To publish local source instead of reusing images:
+
+```sh
+bash scripts/deploy-test.sh --profile portfolio-dev --account 123456789012 \
+  --push-images --github-user YOUR_GITHUB_LOGIN --sso
+```
+
+Start Docker first and enter a GitHub classic PAT with `write:packages` when
+Docker prompts. Newly published GHCR packages are private by default. If the
+script stops at the anonymous image check, set both packages to **Public**,
+then rerun using the printed `--image-tag` instead of `--push-images`.
+Run `bash scripts/deploy-test.sh --help` for all options. Save the printed
+profile, region, and test environment for [teardown](#destroy-an-aws-test-deployment).
+
+### Step-by-step deployment and smoke tests
+
 1. **Install tools and authenticate.** You need Java 21, Maven, Node.js 22,
    AWS CLI v2, and a running Docker daemon with Buildx support. Install the same
    CDK CLI version used by CI:
