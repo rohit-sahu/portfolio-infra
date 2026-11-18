@@ -55,7 +55,7 @@ done
 unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_SECURITY_TOKEN
 export AWS_PAGER=''
 aws_target() {
-  aws --profile "$profile" --region "$region" --output json --no-cli-pager "$@"
+  aws --profile "$profile" --region "$region" --output json "$@"
 }
 
 if "$sso"; then
@@ -130,6 +130,8 @@ done
 
 delete_bucket() {
   local bucket="$1" owned result
+  # Verify ownership through the authenticated account's bucket inventory.
+  # This also works with CLI versions lacking --expected-bucket-owner.
   owned="$(aws_target s3api list-buckets |
     jq --arg bucket "$bucket" 'any(.Buckets[]?; .Name == $bucket)')"
   [[ "$owned" == true ]] || return 0
@@ -137,17 +139,17 @@ delete_bucket() {
   printf 'Emptying versioned bucket %s\n' "$bucket"
   while true; do
     aws_target s3api list-object-versions --bucket "$bucket" \
-      --expected-bucket-owner "$account" --no-paginate --max-keys 1000 |
+      --no-paginate --max-keys 1000 |
       jq -c '{Objects: ([.Versions[]?, .DeleteMarkers[]?] | map({Key, VersionId})), Quiet: true}' > "$batch_file"
     [[ "$(jq '.Objects | length' "$batch_file")" != 0 ]] || break
     result="$(aws_target s3api delete-objects --bucket "$bucket" \
-      --expected-bucket-owner "$account" --delete "file://$batch_file")"
+      --delete "file://$batch_file")"
     if ! jq -e '(.Errors // []) | length == 0' >/dev/null <<< "$result"; then
       printf '%s\n' "$result" >&2
       die "Could not delete every object version from $bucket"
     fi
   done
-  aws_target s3api delete-bucket --bucket "$bucket" --expected-bucket-owner "$account"
+  aws_target s3api delete-bucket --bucket "$bucket"
 }
 
 while IFS=$'\t' read -r kind name; do
